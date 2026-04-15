@@ -1067,7 +1067,7 @@ class RichText extends Widget with SpanningWidget {
                 }
               }
 
-              final baseline = span.baseline * textScaleFactor;
+              final baseline = (span.baseline - (style.height! * style.fontSize! - metrics.ascent + metrics.descent) / 2 - metrics.ascent) * textScaleFactor;
               final mt = tightBounds ? metrics.top : metrics.descent;
               final mb = tightBounds ? metrics.bottom : metrics.ascent;
               top = math.min(top, mt + baseline);
