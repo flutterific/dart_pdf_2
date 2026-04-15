@@ -1174,14 +1174,9 @@ class RichText extends Widget with SpanningWidget {
             }
 
             offsetX = 0.0;
-            if (style.fontSize != null &&
-                style.height != null &&
-                style.height! > 0 &&
-                style.fontSize! >= 1) {
-              offsetY += (style.fontSize! * style.height!).round().toDouble();
-            } else {
-              offsetY += bottom - top;
-            }
+            final fontLineHeight = (style.fontSize! * style.height!).round().toDouble();
+            final contentHeight = bottom - top;
+            offsetY += math.max(fontLineHeight, contentHeight);
             top = 0;
             bottom = 0;
 
@@ -1192,7 +1187,11 @@ class RichText extends Widget with SpanningWidget {
             offsetY += style.lineSpacing! * textScaleFactor;
           }
 
-          final baseline = span.baseline * textScaleFactor;
+            final font = style.font!.getFont(context);
+            final fontAscent = font.ascent * style.fontSize! * textScaleFactor;
+            final fontDescent = font.descent * style.fontSize! * textScaleFactor;
+            final baseline = (span.baseline - (style.height! * style.fontSize! - fontAscent + fontDescent) / 2 -
+              fontAscent + fontDescent) * textScaleFactor;
           top = math.min(top, baseline);
           bottom = math.max(bottom, ws.height + baseline);
 
