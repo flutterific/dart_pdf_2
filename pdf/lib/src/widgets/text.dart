@@ -1032,7 +1032,14 @@ class RichText extends Widget with SpanningWidget {
                   spanCount = 0;
 
                   offsetX = 0.0;
-                  offsetY += bottom - top;
+                  if (style.fontSize != null &&
+                      style.height != null &&
+                      style.height! > 0 &&
+                      style.fontSize! >= 1) {
+                    offsetY += style.fontSize! * style.height!;
+                  } else {
+                    offsetY += bottom - top;
+                  }
                   top = 0;
                   bottom = 0;
 
@@ -1106,7 +1113,14 @@ class RichText extends Widget with SpanningWidget {
 
               offsetX = 0.0;
               if (spanCount > 0) {
-                offsetY += bottom - top;
+                if (style.fontSize != null &&
+                    style.height != null &&
+                    style.height! > 0 &&
+                    style.fontSize! >= 1) {
+                  offsetY += style.fontSize! * style.height!;
+                } else {
+                  offsetY += bottom - top;
+                }
               } else {
                 offsetY +=
                     font.emptyLineHeight * style.fontSize! * textScaleFactor;
@@ -1161,7 +1175,14 @@ class RichText extends Widget with SpanningWidget {
             }
 
             offsetX = 0.0;
-            offsetY += bottom - top;
+            if (style.fontSize != null &&
+                style.height != null &&
+                style.height! > 0 &&
+                style.fontSize! >= 1) {
+              offsetY += style.fontSize! * style.height!;
+            } else {
+              offsetY += bottom - top;
+            }
             top = 0;
             bottom = 0;
 
@@ -1209,7 +1230,18 @@ class RichText extends Widget with SpanningWidget {
           false,
         ),
       );
-      offsetY += bottom - top;
+      final span = _preprocessed!.last;
+      if (span.style != null) {
+        final style = span.style!;
+        if (style.fontSize != null &&
+            style.height != null &&
+            style.height! > 0 &&
+            style.fontSize! >= 1) {
+          offsetY += style.fontSize! * style.height!;
+        } else {
+          offsetY += bottom - top;
+        }
+      }
     }
 
     assert(!overflow || constraintWidth.isFinite);
