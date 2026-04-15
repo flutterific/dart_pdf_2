@@ -1069,9 +1069,8 @@ class RichText extends Widget with SpanningWidget {
 
               final baseline = (span.baseline - (style.height! * style.fontSize! - metrics.ascent + metrics.descent) / 2 - metrics.ascent) * textScaleFactor;
               final mt = tightBounds ? metrics.top : metrics.descent;
-              final mb = tightBounds ? metrics.bottom : metrics.ascent;
               top = math.min(top, mt + baseline);
-              bottom = math.max(bottom, mb + baseline);
+              bottom = 0;
 
               final wd = _Word(word, style, metrics);
               wd.offset = PdfPoint(offsetX, -offsetY + baseline);
