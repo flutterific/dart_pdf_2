@@ -1123,7 +1123,7 @@ class RichText extends Widget with SpanningWidget {
                 }
               } else {
                 offsetY +=
-                    font.emptyLineHeight * style.fontSize! * textScaleFactor;
+                    (style.fontSize! * style.height!).round().toDouble() * textScaleFactor;
               }
               top = 0;
               bottom = 0;
