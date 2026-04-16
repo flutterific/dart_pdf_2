@@ -28,7 +28,6 @@ import '../format/dict.dart';
 import '../format/name.dart';
 import '../format/num.dart';
 import '../format/stream.dart';
-import '../format/string.dart';
 import '../options.dart';
 import 'font.dart';
 import 'font_descriptor.dart';
@@ -47,8 +46,9 @@ class PdfTtfFont extends PdfFont {
     widthsObject = PdfObject<PdfArray>(pdfDocument, params: PdfArray());
   }
 
+  /// Always /TrueType — we use simple TrueType encoding for printer compat
   @override
-  String get subtype => font.unicode ? '/Type0' : super.subtype;
+  String get subtype => '/TrueType';
 
   late PdfUnicodeCmap unicodeCMap;
 
@@ -59,6 +59,9 @@ class PdfTtfFont extends PdfFont {
   late PdfObject<PdfArray> widthsObject;
 
   final TtfParser font;
+
+  /// Tracks char→GID mapping built during subsetting
+  final Map<int, int> _charToGid = {};
 
   @override
   String get fontName => font.fontName;
@@ -114,45 +117,34 @@ class PdfTtfFont extends PdfFont {
     params['/Widths'] = widthsObject.ref();
   }
 
-  void _buildType0(PdfDict params) {
-    int charMin;
-    int charMax;
-
+  /// Build a simple /TrueType font with WinAnsi encoding.
+  /// Matches the structure produced by reportlab which is universally
+  /// supported by all printers.
+  void _buildSimpleTrueType(PdfDict params) {
     final ttfWriter = TtfWriter(font);
-    final data = ttfWriter.withChars(unicodeCMap.cmap);
+    final data = ttfWriter.withChars(unicodeCMap.cmap, charToGid: _charToGid);
     file.buf.putBytes(data);
     file.params['/Length1'] = PdfNum(data.length);
 
-    final descendantFont = PdfDict.values({
-      '/Type': const PdfName('/Font'),
-      '/BaseFont': PdfName('/$fontName'),
-      '/FontFile2': file.ref(),
-      '/FontDescriptor': descriptor.ref(),
-      '/W': PdfArray([const PdfNum(0), widthsObject.ref()]),
-      '/CIDToGIDMap': const PdfName('/Identity'),
-      '/DW': const PdfNum(1000),
-      '/Subtype': const PdfName('/CIDFontType2'),
-      '/CIDSystemInfo': PdfDict.values({
-        '/Supplement': const PdfNum(0),
-        '/Registry': PdfString.fromString('Adobe'),
-        '/Ordering': PdfString.fromString('Identity-H'),
-      }),
-    });
-
     params['/BaseFont'] = PdfName('/$fontName');
-    params['/Encoding'] = const PdfName('/Identity-H');
-    params['/DescendantFonts'] = PdfArray([descendantFont]);
-    params['/ToUnicode'] = unicodeCMap.ref();
+    params['/FontDescriptor'] = descriptor.ref();
 
-    charMin = 0;
-    charMax = unicodeCMap.cmap.length - 1;
-    for (var i = charMin; i <= charMax; i++) {
-      widthsObject.params.add(
-        PdfNum(
-          (glyphMetrics(unicodeCMap.cmap[i]).advanceWidth * 1000.0).toInt(),
-        ),
-      );
+    // Widths for byte codes 0-127 using the charToGid mapping
+    const charMin = 0;
+    const charMax = 127;
+    for (var byteVal = charMin; byteVal <= charMax; byteVal++) {
+      // For WinAnsi, byte values 0-127 = Unicode 0-127
+      if (unicodeCMap.cmap.contains(byteVal)) {
+        widthsObject.params.add(PdfNum(
+            (glyphMetrics(byteVal).advanceWidth * 1000.0).toInt()));
+      } else {
+        widthsObject.params.add(const PdfNum(0));
+      }
     }
+    params['/FirstChar'] = const PdfNum(charMin);
+    params['/LastChar'] = const PdfNum(charMax);
+    params['/Widths'] = widthsObject.ref();
+    params['/ToUnicode'] = unicodeCMap.ref();
   }
 
   @override
@@ -160,7 +152,7 @@ class PdfTtfFont extends PdfFont {
     super.prepare();
 
     if (font.unicode) {
-      _buildType0(params);
+      _buildSimpleTrueType(params);
     } else {
       _buildTrueType(params);
     }
@@ -170,19 +162,25 @@ class PdfTtfFont extends PdfFont {
   void putText(PdfStream stream, String text) {
     if (!font.unicode) {
       super.putText(stream, text);
+      return;
     }
 
     final runes = text.runes;
 
-    stream.putByte(0x3c);
+    // Track characters for subsetting
     for (final rune in runes) {
-      var char = unicodeCMap.cmap.indexOf(rune);
-      if (char == -1) {
-        char = unicodeCMap.cmap.length;
+      if (!unicodeCMap.cmap.contains(rune)) {
         unicodeCMap.cmap.add(rune);
       }
+    }
 
-      stream.putBytes(latin1.encode(char.toRadixString(16).padLeft(4, '0')));
+    // Write single-byte WinAnsi values
+    stream.putByte(0x3c);
+    for (final rune in runes) {
+      final byteVal = unicodeToWinAnsi(rune);
+      final code = byteVal >= 0 ? byteVal : 0x3F; // '?' for unmappable
+      stream.putBytes(
+          latin1.encode(code.toRadixString(16).padLeft(2, '0')));
     }
     stream.putByte(0x3e);
   }

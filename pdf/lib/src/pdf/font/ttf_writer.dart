@@ -79,8 +79,9 @@ class TtfWriter {
     return offset + ((align - (offset % align)) % align);
   }
 
-  /// Write this list of glyphs
-  Uint8List withChars(List<int> chars) {
+  /// Write this list of glyphs.
+  /// [charToGid] is populated with the mapping from char code to new GID.
+  Uint8List withChars(List<int> chars, {Map<int, int>? charToGid}) {
     final tables = <String, Uint8List>{};
     final tablesLength = <String, int>{};
 
@@ -125,6 +126,7 @@ class TtfWriter {
       addGlyph(glyphIndex);
     }
 
+    // Build compact glyph list: glyphs in chars order, then compounds
     final glyphsInfo = <TtfGlyphInfo>[];
 
     for (final char in chars) {
@@ -136,6 +138,13 @@ class TtfWriter {
     }
 
     glyphsInfo.addAll(glyphsMap.values);
+
+    // Build charToGid mapping: char code → new GID in compact list
+    if (charToGid != null) {
+      for (var i = 0; i < chars.length; i++) {
+        charToGid[chars[i]] = i;
+      }
+    }
 
     // Add compound glyphs
     for (final compound in compounds.keys) {
@@ -198,12 +207,15 @@ class TtfWriter {
       }
     }
 
-    // Copy some tables from the original file
+    // Copy tables from the original file (including hinting tables)
     for (final tn in {
       TtfParser.head_table,
       TtfParser.maxp_table,
       TtfParser.hhea_table,
       TtfParser.os_2_table,
+      'cvt ',
+      'fpgm',
+      'prep',
     }) {
       final start = ttf.tableOffsets[tn];
       if (start == null) {
@@ -273,37 +285,63 @@ class TtfWriter {
     }
 
     {
-      // CMAP table
-      const len = 40;
+      // CMAP table - format 6 with platform 1/encoding 0 (Mac Roman)
+      // This matches what reportlab produces and is universally supported
+      final entryCount = 128;
+      final glyphIdArraySize = entryCount * 2;
+      final subtableLen = 10 + glyphIdArraySize; // format(2) + length(2) + language(2) + firstCode(2) + entryCount(2) + array
+      final len = 4 + 8 + subtableLen; // header(4) + encoding record(8) + subtable
       final cmap = Uint8List(_wordAlign(len));
       final cmapData = cmap.buffer.asByteData();
-      cmapData.setUint16(0, 0); // Table version number
-      cmapData.setUint16(2, 1); // Number of encoding tables that follow.
-      cmapData.setUint16(4, 3); // Platform ID
-      cmapData.setUint16(6, 10); // Platform-specific encoding ID
-      cmapData.setUint32(8, 12); // Offset from beginning of table
-      cmapData.setUint16(12, 12); // Table format
-      cmapData.setUint32(16, 28); // Table length
-      cmapData.setUint32(20, 1); // Table language
-      cmapData.setUint32(24, 1); // numGroups
-      cmapData.setUint32(28, 32); // startCharCode
-      cmapData.setUint32(32, chars.length + 31); // endCharCode
-      cmapData.setUint32(36, 0); // startGlyphID
+      // Header
+      cmapData.setUint16(0, 0); // version
+      cmapData.setUint16(2, 1); // numTables
+      // Encoding record: platform 1 (Mac), encoding 0 (Roman)
+      cmapData.setUint16(4, 1); // platformID
+      cmapData.setUint16(6, 0); // encodingID
+      cmapData.setUint32(8, 12); // offset to subtable
+      // Format 6 subtable
+      cmapData.setUint16(12, 6); // format
+      cmapData.setUint16(14, subtableLen); // length
+      cmapData.setUint16(16, 0); // language
+      cmapData.setUint16(18, 0); // firstCode
+      cmapData.setUint16(20, entryCount); // entryCount
+      // Glyph ID array: for each char code 0-127, map to compact GID
+      for (var code = 0; code < entryCount; code++) {
+        var gid = 0; // default to .notdef
+        // Find if this char code is in our chars list
+        for (var i = 0; i < chars.length; i++) {
+          if (chars[i] == code) {
+            gid = i;
+            break;
+          }
+        }
+        cmapData.setUint16(22 + code * 2, gid);
+      }
 
       tables[TtfParser.cmap_table] = cmap;
       tablesLength[TtfParser.cmap_table] = len;
     }
 
     {
-      // name table
-      const len = 18;
-      final nameBuf = Uint8List(_wordAlign(len));
-      final nameData = nameBuf.buffer.asByteData();
-      nameData.setUint16(0, 0); // Table version number 0
-      nameData.setUint16(2, 0); // Count 0 -> no names
-      nameData.setUint16(4, 6); // Storage Offset
-      tables[TtfParser.name_table] = nameBuf;
-      tablesLength[TtfParser.name_table] = len;
+      // name table - copy from original to preserve font name
+      final start = ttf.tableOffsets[TtfParser.name_table];
+      if (start != null) {
+        final len = ttf.tableSize[TtfParser.name_table]!;
+        final data = Uint8List.fromList(
+            ttf.bytes.buffer.asUint8List(start, _wordAlign(len)));
+        tables[TtfParser.name_table] = data;
+        tablesLength[TtfParser.name_table] = len;
+      } else {
+        const len = 18;
+        final nameBuf = Uint8List(_wordAlign(len));
+        final nameData = nameBuf.buffer.asByteData();
+        nameData.setUint16(0, 0);
+        nameData.setUint16(2, 0);
+        nameData.setUint16(4, 6);
+        tables[TtfParser.name_table] = nameBuf;
+        tablesLength[TtfParser.name_table] = len;
+      }
     }
 
     {
@@ -315,31 +353,20 @@ class TtfWriter {
       final start = ByteData(12 + numTables * 16);
       start.setUint32(0, 0x00010000);
       start.setUint16(4, numTables);
-      var pot = numTables;
-      while (pot & (pot - 1) != 0) {
-        pot++;
+      var maxPow2 = 1;
+      while (maxPow2 * 2 <= numTables) {
+        maxPow2 *= 2;
       }
-      start.setUint16(6, pot * 16);
-      start.setUint16(8, math.log(pot).toInt());
-      start.setUint16(10, pot * 16 - numTables * 16);
+      start.setUint16(6, maxPow2 * 16);
+      start.setUint16(8, (math.log(maxPow2) / math.log(2)).round());
+      start.setUint16(10, numTables * 16 - maxPow2 * 16);
 
       // Create the table directory
       var count = 0;
       var offset = 12 + numTables * 16;
       var headOffset = 0;
 
-      final tableKeys = [
-        TtfParser.head_table,
-        TtfParser.hhea_table,
-        TtfParser.maxp_table,
-        TtfParser.os_2_table,
-        TtfParser.hmtx_table,
-        TtfParser.cmap_table,
-        TtfParser.loca_table,
-        TtfParser.glyf_table,
-        TtfParser.name_table,
-        TtfParser.post_table,
-      ];
+      final tableKeys = tables.keys.toList()..sort();
 
       for (final name in tableKeys) {
         final data = tables[name]!;
