@@ -285,38 +285,52 @@ class TtfWriter {
     }
 
     {
-      // CMAP table - format 6 with platform 1/encoding 0 (Mac Roman)
-      // This matches what reportlab produces and is universally supported
-      final entryCount = 128;
-      final glyphIdArraySize = entryCount * 2;
-      final subtableLen = 10 + glyphIdArraySize; // format(2) + length(2) + language(2) + firstCode(2) + entryCount(2) + array
+      // CMAP table - platform 3/encoding 1 (Windows Unicode BMP), format 12
+      // Maps Unicode code points to compact GIDs. The PDF viewer maps
+      // WinAnsi byte values to Unicode, then looks up in this (3,1) cmap.
+      // This handles all characters including em dash (U+2014).
+      final cmapEntries = <List<int>>[];
+      for (var i = 1; i < chars.length; i++) {
+        if (chars[i] > 0) {
+          cmapEntries.add([chars[i], i]); // Unicode → compact GID
+        }
+      }
+      cmapEntries.sort((a, b) => a[0].compareTo(b[0]));
+
+      // Merge consecutive Unicode runs with consecutive GIDs
+      final groups = <List<int>>[];
+      for (final entry in cmapEntries) {
+        if (groups.isNotEmpty &&
+            entry[0] == groups.last[1] + 1 &&
+            entry[1] == groups.last[2] + entry[0] - groups.last[0]) {
+          groups.last[1] = entry[0];
+        } else {
+          groups.add([entry[0], entry[0], entry[1]]);
+        }
+      }
+
+      final numGroups = groups.length;
+      final subtableLen = 16 + numGroups * 12;
       final len = 4 + 8 + subtableLen; // header(4) + encoding record(8) + subtable
       final cmap = Uint8List(_wordAlign(len));
       final cmapData = cmap.buffer.asByteData();
       // Header
       cmapData.setUint16(0, 0); // version
       cmapData.setUint16(2, 1); // numTables
-      // Encoding record: platform 1 (Mac), encoding 0 (Roman)
-      cmapData.setUint16(4, 1); // platformID
-      cmapData.setUint16(6, 0); // encodingID
+      // Encoding record: platform 3 (Windows), encoding 1 (Unicode BMP)
+      cmapData.setUint16(4, 3); // platformID
+      cmapData.setUint16(6, 1); // encodingID
       cmapData.setUint32(8, 12); // offset to subtable
-      // Format 6 subtable
-      cmapData.setUint16(12, 6); // format
-      cmapData.setUint16(14, subtableLen); // length
-      cmapData.setUint16(16, 0); // language
-      cmapData.setUint16(18, 0); // firstCode
-      cmapData.setUint16(20, entryCount); // entryCount
-      // Glyph ID array: for each char code 0-127, map to compact GID
-      for (var code = 0; code < entryCount; code++) {
-        var gid = 0; // default to .notdef
-        // Find if this char code is in our chars list
-        for (var i = 0; i < chars.length; i++) {
-          if (chars[i] == code) {
-            gid = i;
-            break;
-          }
-        }
-        cmapData.setUint16(22 + code * 2, gid);
+      // Format 12 subtable
+      cmapData.setUint16(12, 12); // format
+      cmapData.setUint32(16, subtableLen); // length
+      cmapData.setUint32(20, 0); // language
+      cmapData.setUint32(24, numGroups); // numGroups
+      for (var i = 0; i < numGroups; i++) {
+        final off = 28 + i * 12;
+        cmapData.setUint32(off, groups[i][0]); // startCharCode
+        cmapData.setUint32(off + 4, groups[i][1]); // endCharCode
+        cmapData.setUint32(off + 8, groups[i][2]); // startGlyphID
       }
 
       tables[TtfParser.cmap_table] = cmap;
