@@ -132,7 +132,14 @@ class TtfWriter {
     for (final char in chars) {
       final glyphsIndex = charMap[char];
       if (glyphsIndex != null) {
-        glyphsInfo.add(glyphsMap[glyphsIndex] ?? glyphsMap.values.first);
+        // Skip if the glyph has already been emitted. This happens when the
+        // same char appears twice in `chars`, or when multiple chars share a
+        // glyph (e.g. unmapped chars all fall back to glyph 0 / .notdef).
+        // Falling back to `glyphsMap.values.first` would either emit the wrong
+        // glyph or throw `Bad state: No element` once `glyphsMap` is empty.
+        final glyph = glyphsMap[glyphsIndex];
+        if (glyph == null) continue;
+        glyphsInfo.add(glyph);
         glyphsMap.remove(glyphsIndex);
       }
     }
