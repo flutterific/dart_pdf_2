@@ -118,4 +118,50 @@ void main() {
     final output = File('${font.fontName}.ttf');
     output.writeAsBytesSync(data);
   });
+
+  // Regression test for issue #425.
+  //
+  // When chars contains code points missing from the source font (or
+  // multiple chars sharing one source glyph), the prior dedup-skip logic
+  // produced a cmap whose GIDs drifted past `maxp.numGlyphs`. Verify that
+  // every cmap entry now resolves to a valid GID.
+  test('Font SubSetting maps unmapped runes to valid GIDs', () {
+    final fontData = File('open-sans.ttf').readAsBytesSync();
+    final font = TtfParser(fontData.buffer.asByteData());
+
+    // Pick code points the font doesn't cover. These would all collapse to
+    // glyph 0 in the source font, hitting the dedup path on the 2nd+ rune.
+    const unmapped = [0xE000, 0xE001, 0xE002]; // Private Use Area
+    for (final c in unmapped) {
+      expect(font.charToGlyphIndexMap.containsKey(c), isFalse,
+          reason: 'sanity: $c must not be in the source font');
+    }
+
+    final chars = <int>[
+      0, // .notdef placeholder cmap[0]
+      ...'hello'.runes,
+      ...unmapped,
+      0xA0, // NBSP — same glyph as space in many fonts
+      0x20,
+    ];
+
+    final ttfWriter = TtfWriter(font);
+    final charToGid = <int, int>{};
+    final data = ttfWriter.withChars(chars, charToGid: charToGid);
+
+    // Re-parse the subset and confirm every cmap mapping points within range.
+    final subset = TtfParser(data.buffer.asByteData());
+    for (final entry in subset.charToGlyphIndexMap.entries) {
+      expect(entry.value, lessThan(subset.numGlyphs),
+          reason: 'unicode U+${entry.key.toRadixString(16)} → GID '
+              '${entry.value} is past maxp.numGlyphs (${subset.numGlyphs})');
+    }
+
+    // charToGid (used by the simple TrueType path) must agree.
+    for (final entry in charToGid.entries) {
+      expect(entry.value, lessThan(subset.numGlyphs),
+          reason: 'charToGid U+${entry.key.toRadixString(16)} → GID '
+              '${entry.value} is past maxp.numGlyphs (${subset.numGlyphs})');
+    }
+  });
 }
