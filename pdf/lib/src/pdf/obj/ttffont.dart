@@ -164,8 +164,11 @@ class PdfTtfFont extends PdfFont {
     int charMin;
     int charMax;
 
+    // dedup: false keeps glyphsInfo[i] aligned with unicodeCMap.cmap[i].
+    // putText writes CID = cmap.indexOf(rune), and Identity-H treats CID as
+    // GID, so the embedded font must have the rune's glyph at that exact slot.
     final ttfWriter = TtfWriter(font);
-    final data = ttfWriter.withChars(unicodeCMap.cmap);
+    final data = ttfWriter.withChars(unicodeCMap.cmap, dedup: false);
     file.buf.putBytes(data);
     file.params['/Length1'] = PdfNum(data.length);
 

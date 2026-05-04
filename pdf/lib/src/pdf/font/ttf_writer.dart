@@ -81,7 +81,17 @@ class TtfWriter {
 
   /// Write this list of glyphs.
   /// [charToGid] is populated with the mapping from char code to new GID.
-  Uint8List withChars(List<int> chars, {Map<int, int>? charToGid}) {
+  ///
+  /// When [dedup] is true (default) glyphs shared by multiple chars are
+  /// emitted once and `charToGid` / cmap entries route every char to that
+  /// single slot. When false, each char in [chars] gets its own glyph slot,
+  /// keeping `glyphsInfo[i]` aligned with `chars[i]`. Required for the CID
+  /// /Type0 path where Identity-H makes the position-in-cmap the GID.
+  Uint8List withChars(
+    List<int> chars, {
+    Map<int, int>? charToGid,
+    bool dedup = true,
+  }) {
     final tables = <String, Uint8List>{};
     final tablesLength = <String, int>{};
 
@@ -126,40 +136,58 @@ class TtfWriter {
       addGlyph(glyphIndex);
     }
 
-    // Build compact glyph list: glyphs in chars order, then compounds
+    // Build compact glyph list: glyphs in chars order, then compounds.
+    // origToNewGid tracks where each original GID landed in glyphsInfo, so
+    // cmap subtable entries, charToGid, and compound references all resolve
+    // to a real slot — never the loop index, which drifts on dedup or skip.
     final glyphsInfo = <TtfGlyphInfo>[];
+    final origToNewGid = <int, int>{};
 
     for (final char in chars) {
       final glyphsIndex = charMap[char];
-      if (glyphsIndex != null) {
-        // Skip if the glyph has already been emitted. This happens when the
-        // same char appears twice in `chars`, or when multiple chars share a
-        // glyph (e.g. unmapped chars all fall back to glyph 0 / .notdef).
-        // Falling back to `glyphsMap.values.first` would either emit the wrong
-        // glyph or throw `Bad state: No element` once `glyphsMap` is empty.
-        final glyph = glyphsMap[glyphsIndex];
-        if (glyph == null) continue;
-        glyphsInfo.add(glyph);
-        glyphsMap.remove(glyphsIndex);
+      if (glyphsIndex == null) {
+        continue;
       }
+      if (dedup && origToNewGid.containsKey(glyphsIndex)) {
+        continue;
+      }
+      final glyph = glyphsMap[glyphsIndex];
+      if (glyph == null) {
+        continue;
+      }
+      origToNewGid.putIfAbsent(glyphsIndex, () => glyphsInfo.length);
+      glyphsInfo.add(glyph);
     }
 
-    glyphsInfo.addAll(glyphsMap.values);
+    // Add compound child glyphs that no char referenced directly.
+    for (final entry in glyphsMap.entries) {
+      if (origToNewGid.containsKey(entry.key)) {
+        continue;
+      }
+      origToNewGid[entry.key] = glyphsInfo.length;
+      glyphsInfo.add(entry.value);
+    }
 
     // Build charToGid mapping: char code → new GID in compact list
     if (charToGid != null) {
-      for (var i = 0; i < chars.length; i++) {
-        charToGid[chars[i]] = i;
+      for (final char in chars) {
+        final origGid = charMap[char];
+        if (origGid == null) {
+          continue;
+        }
+        final newGid = origToNewGid[origGid];
+        if (newGid == null) {
+          continue;
+        }
+        charToGid[char] = newGid;
       }
     }
 
-    // Add compound glyphs
+    // Compound references point at the first occurrence of each origGid.
     for (final compound in compounds.keys) {
-      final index = glyphsInfo.firstWhere(
-        (TtfGlyphInfo glyph) => glyph.index == compound,
-      );
-      compounds[compound] = glyphsInfo.indexOf(index);
-      assert((compounds[compound] ?? 0) >= 0, 'Unable to find the glyph');
+      final newGid = origToNewGid[compound];
+      assert(newGid != null, 'Unable to find the glyph');
+      compounds[compound] = newGid ?? 0;
     }
 
     // update compound indices
@@ -298,9 +326,18 @@ class TtfWriter {
       // This handles all characters including em dash (U+2014).
       final cmapEntries = <List<int>>[];
       for (var i = 1; i < chars.length; i++) {
-        if (chars[i] > 0) {
-          cmapEntries.add([chars[i], i]); // Unicode → compact GID
+        if (chars[i] <= 0) {
+          continue;
         }
+        final origGid = charMap[chars[i]];
+        if (origGid == null) {
+          continue;
+        }
+        final newGid = origToNewGid[origGid];
+        if (newGid == null) {
+          continue;
+        }
+        cmapEntries.add([chars[i], newGid]); // Unicode → compact GID
       }
       cmapEntries.sort((a, b) => a[0].compareTo(b[0]));
 
