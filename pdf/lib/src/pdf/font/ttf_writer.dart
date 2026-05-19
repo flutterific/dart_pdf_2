@@ -320,10 +320,6 @@ class TtfWriter {
     }
 
     {
-      // CMAP table - platform 3/encoding 1 (Windows Unicode BMP), format 12
-      // Maps Unicode code points to compact GIDs. The PDF viewer maps
-      // WinAnsi byte values to Unicode, then looks up in this (3,1) cmap.
-      // This handles all characters including em dash (U+2014).
       final cmapEntries = <List<int>>[];
       for (var i = 1; i < chars.length; i++) {
         if (chars[i] <= 0) {

@@ -47,11 +47,8 @@ class PdfTtfFont extends PdfFont {
     widthsObject = PdfObject<PdfArray>(pdfDocument, params: PdfArray());
   }
 
-  /// Use simple /TrueType for WinAnsi text (printer-compatible),
-  /// fall back to /Type0 CID for non-WinAnsi text (CJK etc.)
   @override
-  String get subtype =>
-      font.unicode && !_useSimpleTrueType ? '/Type0' : '/TrueType';
+  String get subtype => font.unicode ? '/Type0' : super.subtype;
 
   late PdfUnicodeCmap unicodeCMap;
 
@@ -62,16 +59,6 @@ class PdfTtfFont extends PdfFont {
   late PdfObject<PdfArray> widthsObject;
 
   final TtfParser font;
-
-  /// Tracks char→GID mapping built during subsetting
-  final Map<int, int> _charToGid = {};
-
-  /// True = simple /TrueType + WinAnsi (printer-safe for Latin text).
-  /// False = CID /Type0 + Identity-H (needed for CJK).
-  /// Locked on the first putText call based on actual text content:
-  /// if any non-WinAnsi character appears, CID is used from the start.
-  bool _useSimpleTrueType = true;
-  bool _encodingLocked = false;
 
   @override
   String get fontName => font.fontName;
@@ -127,39 +114,9 @@ class PdfTtfFont extends PdfFont {
     params['/Widths'] = widthsObject.ref();
   }
 
-  /// Build a simple /TrueType font with WinAnsi encoding.
-  /// Universally supported by all printers.
-  void _buildSimpleTrueType(PdfDict params) {
-    final ttfWriter = TtfWriter(font);
-    final data = ttfWriter.withChars(unicodeCMap.cmap, charToGid: _charToGid);
-    file.buf.putBytes(data);
-    file.params['/Length1'] = PdfNum(data.length);
-
-    params['/BaseFont'] = PdfName('/$fontName');
-    params['/FontDescriptor'] = descriptor.ref();
-
-    // Widths for WinAnsi byte codes 0-255
-    // Byte values 128-159 map to special Unicode code points (em dash, smart
-    // quotes, etc.); 160-255 map to Latin-1 Supplement (accented chars).
-    const charMin = 0;
-    const charMax = 255;
-    for (var byteVal = charMin; byteVal <= charMax; byteVal++) {
-      final unicode = winAnsiToUnicode(byteVal);
-      if (unicode > 0 && unicodeCMap.cmap.contains(unicode)) {
-        widthsObject.params.add(PdfNum(
-            (glyphMetrics(unicode).advanceWidth * 1000.0).toInt()));
-      } else {
-        widthsObject.params.add(const PdfNum(0));
-      }
-    }
-    params['/FirstChar'] = const PdfNum(charMin);
-    params['/LastChar'] = const PdfNum(charMax);
-    params['/Widths'] = widthsObject.ref();
-    params['/ToUnicode'] = unicodeCMap.ref();
-  }
-
   /// Build a CID /Type0 font with Identity-H encoding.
-  /// Required for CJK and other non-WinAnsi text.
+  /// Cross-reader-safe for Unicode text; the dart_pdf_2 ttf_writer subsets
+  /// the font and embeds hinting tables, so this is printer-compatible too.
   void _buildType0(PdfDict params) {
     int charMin;
     int charMax;
@@ -208,14 +165,10 @@ class PdfTtfFont extends PdfFont {
   void prepare() {
     super.prepare();
 
-    if (!font.unicode) {
-      _buildTrueType(params);
-    } else if (_useSimpleTrueType) {
-      _buildSimpleTrueType(params);
-    } else {
-      // CJK path: configure ToUnicode for 2-byte CID keys
-      unicodeCMap.useWinAnsiKeys = false;
+    if (font.unicode) {
       _buildType0(params);
+    } else {
+      _buildTrueType(params);
     }
   }
 
@@ -235,38 +188,16 @@ class PdfTtfFont extends PdfFont {
       }
     }
 
-    // Lock encoding mode on first call: if ANY rune in this first batch
-    // is non-WinAnsi, commit to CID for the entire font lifetime.
-    if (!_encodingLocked) {
-      _encodingLocked = true;
-      for (final rune in runes) {
-        if (unicodeToWinAnsi(rune) < 0) {
-          _useSimpleTrueType = false;
-          break;
-        }
-      }
-    }
-
+    // Two-byte CID encoding via Identity-H
     stream.putByte(0x3c);
-    if (_useSimpleTrueType) {
-      // Single-byte WinAnsi encoding (Latin text)
-      for (final rune in runes) {
-        final byteVal = unicodeToWinAnsi(rune);
-        final code = byteVal >= 0 ? byteVal : 0x3F; // '?' fallback
-        stream.putBytes(
-            latin1.encode(code.toRadixString(16).padLeft(2, '0')));
+    for (final rune in runes) {
+      var char = unicodeCMap.cmap.indexOf(rune);
+      if (char == -1) {
+        char = unicodeCMap.cmap.length;
+        unicodeCMap.cmap.add(rune);
       }
-    } else {
-      // Two-byte CID encoding (CJK text)
-      for (final rune in runes) {
-        var char = unicodeCMap.cmap.indexOf(rune);
-        if (char == -1) {
-          char = unicodeCMap.cmap.length;
-          unicodeCMap.cmap.add(rune);
-        }
-        stream.putBytes(
-            latin1.encode(char.toRadixString(16).padLeft(4, '0')));
-      }
+      stream.putBytes(
+          latin1.encode(char.toRadixString(16).padLeft(4, '0')));
     }
     stream.putByte(0x3e);
   }
