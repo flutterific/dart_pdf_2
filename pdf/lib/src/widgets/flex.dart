@@ -283,6 +283,13 @@ class Flex extends MultiChildWidget with SpanningWidget {
         crossSize = math.max(crossSize, _getCrossSize(child));
         if (direction == Axis.vertical &&
             allocatedSize > constraints.maxHeight) {
+          // Include the child that crosses the boundary so it still renders
+          // (clipped by the page), matching Flutter's Column overflow
+          // behavior. Breaking *before* the crossing child silently dropped
+          // it: a taller-than-constraints child (e.g. a full-height divider
+          // column) vanished from the output entirely.
+          lastFlexChild = child;
+          index++;
           break;
         }
       }
