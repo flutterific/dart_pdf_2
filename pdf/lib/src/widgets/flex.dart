@@ -287,7 +287,31 @@ class Flex extends MultiChildWidget with SpanningWidget {
           // (clipped by the page), matching Flutter's Column overflow
           // behavior. Breaking *before* the crossing child silently dropped
           // it: a taller-than-constraints child (e.g. a full-height divider
-          // column) vanished from the output entirely.
+          // column) vanished from the output entirely. In MultiPage it also
+          // made pagination stall when the crossing child was the first child
+          // in a fragment and taller than a full page's available content
+          // area: lastChild stayed equal to firstChild, so restoreContext
+          // restarted at the same child on every page (TooManyPagesException
+          // with asserts enabled; an infinite loop in release).
+          //
+          // TODO: Known side effect on MultiPage spanning, to address later.
+          // Advancing `index` past the crossing child means the next page's
+          // fragment resumes *after* it. For a mid-list child that would fit
+          // on a fresh page but not in the space left on the current page,
+          // MultiPage now paints the visible portion on this page and never
+          // resumes the overflow; the overflow can draw into the bottom
+          // margin/footer and, if it reaches the physical page edge, be
+          // clipped there. Before this change, that child moved intact to the
+          // next page. To restore push-to-next-page while keeping both fixes
+          // above, include the crossing child only when it starts its fragment
+          // (and thus could never fit on any page):
+          //   if (index == _context.firstChild) {
+          //     lastFlexChild = child;
+          //     index++;
+          //   }
+          //   break;
+          // Caveat: a mid-list crossing child in a bounded, non-paginated
+          // Column would then be silently dropped again, as before.
           lastFlexChild = child;
           index++;
           break;
