@@ -66,8 +66,7 @@ class PdfUnicodeCmap extends PdfObjectStream {
         final key = entries[offset + j][0];
         final value = entries[offset + j][1];
         final keyHex = key.toRadixString(16).toUpperCase().padLeft(4, '0');
-        final valHex = value.toRadixString(16).toUpperCase().padLeft(4, '0');
-        buf.putString('<$keyHex> <$valHex>\n');
+        buf.putString('<$keyHex> <${_utf16BeHex(value)}>\n');
       }
       buf.putString('endbfchar\n');
       offset += count;
@@ -79,5 +78,26 @@ class PdfUnicodeCmap extends PdfObjectStream {
         'end\n'
         'end');
     super.prepare();
+  }
+
+  /// A bfchar destination is UTF-16BE, so a code point above U+FFFF needs a
+  /// surrogate pair. Written as plain hex (`<100043>`), readers decoded it
+  /// as an unrelated BMP character.
+  ///
+  /// The supplementary private-use planes (U+F0000 and up) hold icon glyphs
+  /// such as SF Symbols, which have no text meaning; they map to a space so
+  /// copied text and ATS parsers don't receive unassigned code points in
+  /// front of a phone number or email.
+  static String _utf16BeHex(int codePoint) {
+    String hex(int unit) =>
+        unit.toRadixString(16).toUpperCase().padLeft(4, '0');
+    if (codePoint >= 0xF0000) {
+      return hex(0x20);
+    }
+    if (codePoint > 0xFFFF) {
+      final v = codePoint - 0x10000;
+      return hex(0xD800 + (v >> 10)) + hex(0xDC00 + (v & 0x3FF));
+    }
+    return hex(codePoint);
   }
 }
